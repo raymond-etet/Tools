@@ -1,0 +1,199 @@
+# =================================================================================
+# Clash.Meta 优化版配置 for [OpenWrt + AdGuard Home + OpenClash] - GeoIP版
+#
+# 优化内容:
+# 1. 禁用IPv6 DNS解析，解决"ip version error"
+# 2. 启用GEOSITE/GEOIP支持，使用CDN加速下载
+# 3. 使用地理数据库规则简化配置
+# 4. 优化DNS配置，提升稳定性
+# =================================================================================
+
+# --- 端口设置 (保持原有配置) ---
+port: 7890
+socks-port: 7891
+mixed-port: 7893
+redir-port: 7892
+tproxy-port: 7895
+
+# --- 基础设置 ---
+allow-lan: true
+bind-address: "*"
+mode: rule
+external-controller: 0.0.0.0:9090 # 允许外部访问
+secret: "" # 空密钥，无需验证
+log-level: warning # 减少日志输出提升性能
+
+# --- DNS 配置 (修复版) ---
+dns:
+  enable: true
+  listen: 0.0.0.0:7874
+  ipv6: false # 修复: 禁用IPv6避免DNS解析错误
+  prefer-h3: false # 修复: 禁用HTTP/3避免协议错误
+  use-hosts: true
+  respect-rules: true
+  enhanced-mode: fake-ip
+  fake-ip-range: 198.18.0.1/16
+  fake-ip-filter:
+    - "*.lan"
+    - "*.local"
+    - "*.localdomain"
+    - "+.stun.*.*"
+    - "+.stun.*.*.*"
+    - "+.stun.*.*.*.*"
+    - "+.stun.*.*.*.*.*"
+    - "*.msftconnecttest.com"
+    - "*.msftncsi.com"
+    - "msftconnecttest.com"
+    - "msftncsi.com"
+
+  # 国内 DNS - 使用更稳定的IPv4 DNS
+  default-nameserver:
+    - 223.5.5.5 # 阿里DNS
+    - 119.29.29.29 # 腾讯DNS
+    - 114.114.114.114 # 114DNS
+    - 8.8.8.8 # Google DNS (备用)
+
+  # 国外 DNS - 使用传统DNS避免DoH问题
+  nameserver:
+    - 223.5.5.5 # 阿里DNS
+    - 119.29.29.29 # 腾讯DNS
+    - 8.8.8.8 # Google DNS
+    - 1.1.1.1 # Cloudflare DNS
+
+  # 代理DNS (简化配置避免连接问题)
+  proxy-server-nameserver:
+    - 8.8.8.8
+    - 1.1.1.1
+
+  # 使用geosite规则配置DNS策略
+  nameserver-policy:
+    "geosite:cn": ["223.5.5.5", "119.29.29.29"]
+    "geosite:private": ["system"]
+    "+.cn": ["223.5.5.5", "119.29.29.29"]
+    "+.local": ["system"]
+    # 常见国内域名后缀直接使用国内DNS
+    "+.com.cn": ["223.5.5.5", "119.29.29.29"]
+    "+.net.cn": ["223.5.5.5", "119.29.29.29"]
+    "+.org.cn": ["223.5.5.5", "119.29.29.29"]
+    "+.gov.cn": ["223.5.5.5", "119.29.29.29"]
+
+  # 启用geoip过滤器
+  fallback-filter:
+    geoip: true # 启用geoip过滤
+    geoip-code: CN # 中国大陆IP使用国内DNS
+    ipcidr: ["240.0.0.0/4", "0.0.0.0/32", "127.0.0.1/32"]
+    domain:
+      [
+        "+.google.com",
+        "+.facebook.com",
+        "+.youtube.com",
+        "+.github.com",
+        "+.githubusercontent.com",
+      ]
+
+# --- 流量探测 Sniffer (修复版) ---
+sniffer:
+  enable: true
+  parse-pure-ip: true
+  override-destination: true
+  sniff:
+    TLS:
+      ports: [443, 8443]
+    HTTP:
+      ports: [80, 8080-8880]
+  skip-domain:
+    - "*.lan"
+    - "*.local"
+    # 跳过国内域名嗅探
+    - "geosite:cn"
+    - "*.cn"
+    - "*.com.cn"
+    - "*.net.cn"
+    - "*.org.cn"
+
+# --- 状态与缓存 ---
+profile:
+  store-selected: true
+  store-fake-ip: true
+
+# --- 代理节点 (保持原有) ---
+
+# --- 分流规则 (GeoIP版 - 大陆香港直连，其他走代理) ---
+rules:
+  # 本地网络直连
+  - DOMAIN-SUFFIX,local,DIRECT
+  - DOMAIN-SUFFIX,localhost,DIRECT
+  - DOMAIN-SUFFIX,lan,DIRECT
+  - IP-CIDR,127.0.0.0/8,DIRECT
+  - IP-CIDR,10.0.0.0/8,DIRECT
+  - IP-CIDR,172.16.0.0/12,DIRECT
+  - IP-CIDR,192.168.0.0/16,DIRECT
+  - IP-CIDR,169.254.0.0/16,DIRECT
+
+  # 自定义直连域名
+  # - DOMAIN-SUFFIX,pc528.net,DIRECT
+  # - DOMAIN-SUFFIX,pc521.net,DIRECT
+
+  # 中国大陆域名和IP直连 (使用GeoSite和GeoIP)
+  - GEOSITE,cn,DIRECT
+  - GEOSITE,private,DIRECT
+  - GEOIP,cn,DIRECT
+
+  # 香港IP直连 (使用GeoIP)
+  - GEOIP,hk,DIRECT
+
+  # 中国大陆常见域名后缀直连
+  - DOMAIN-SUFFIX,cn,DIRECT
+  - DOMAIN-SUFFIX,com.cn,DIRECT
+  - DOMAIN-SUFFIX,net.cn,DIRECT
+  - DOMAIN-SUFFIX,org.cn,DIRECT
+  - DOMAIN-SUFFIX,gov.cn,DIRECT
+  - DOMAIN-SUFFIX,edu.cn,DIRECT
+
+  # 国外知名服务走代理 (确保不被上面规则误判)
+  - GEOSITE,google,🚀 节点选择
+  - GEOSITE,github,🚀 节点选择
+  - GEOSITE,youtube,🚀 节点选择
+  - GEOSITE,facebook,🚀 节点选择
+  - GEOSITE,twitter,🚀 节点选择
+  - GEOSITE,telegram,🚀 节点选择
+  - GEOSITE,netflix,🚀 节点选择
+
+  # 其他所有流量走代理
+  - MATCH,🚀 节点选择
+
+# --- 性能优化 (针对 OpenWrt 环境) ---
+tcp-concurrent: true # TCP并发连接：启用多路复用，提高网络连接效率，减少延迟
+udp-idle-timeout: 60 # UDP空闲超时：UDP连接空闲60秒后自动断开，释放资源
+keep-alive-idle: 600 # TCP Keep-Alive空闲时间：600秒后发送保活包检测连接状态
+keep-alive-interval: 15 # TCP Keep-Alive间隔：每15秒发送一次保活探测包
+
+# --- 网络优化 (修复版) ---
+interface-name: "" # 绑定网络接口：留空表示自动选择，可指定具体网卡名称(如eth0)
+routing-mark: 0 # 路由标记：用于Linux iptables标记数据包，0表示不设置标记
+
+# --- 实验性功能 (OpenClash 兼容) ---
+experimental:
+  unified-delay: true # 统一延迟测试：使用统一的延迟测试方法，提高测试准确性
+  ignore-resolve-fail: true # 忽略DNS解析失败：当DNS解析失败时继续运行，提升稳定性
+  cache-file: /tmp/clash.db # 缓存文件路径：存储DNS和连接缓存的文件位置
+  cache-size: 100000 # 缓存条目数量：最多缓存10万条DNS记录，充分利用8GB内存
+  cache-ttl: 3600 # 缓存生存时间：缓存记录保存1小时(3600秒)，减少DNS查询频率
+
+# --- 故障处理与重试策略 ---
+find-process-mode: strict # 进程查找模式：严格模式，精确匹配进程信息用于流量分析
+global-ua: ClashMetaForAndroid/2.8.9.Meta # 全局User-Agent：伪装为Android版Clash客户端
+global-client-fingerprint: chrome # 全局TLS指纹：伪装为Chrome浏览器的TLS握手特征
+
+# --- 地理数据库错误处理 ---
+geo-auto-fallback: true # 地理数据库自动降级：主数据源失败时自动切换到备用数据源
+geo-lazy-load: false # 地理数据库懒加载：禁用延迟加载，启动时完整加载避免运行时错误
+
+# --- 地理数据库配置 (使用本地文件版) ---
+geodata-mode: true # 地理数据模式：启用基于地理位置的路由规则匹配
+geodata-loader: memconservative # 地理数据加载器：内存保守模式，平衡内存使用和性能
+geo-auto-update: false # 地理数据自动更新：禁用自动更新，使用OpenClash预装的本地文件
+
+# 使用OpenClash自带的本地地理数据库文件
+# OpenClash会自动使用 /usr/share/openclash/ 目录下的本地文件
+# 不需要配置 geox-url 和 geox-fallback-url，让系统使用默认本地路径
